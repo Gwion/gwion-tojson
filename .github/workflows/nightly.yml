@@ -1,0 +1,74 @@
+name: Nightly
+
+on:
+  push:
+    branches: 
+    - 'master'
+
+jobs:
+  nightly:
+    name: Deploy nightly
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+    env:
+      CC: gcc
+      USE_LTO: 1 
+    runs-on: ${{ matrix.os }}
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Gwion
+      run: |
+        git clone https://github.com/Gwion/Gwion
+        cd Gwion
+        git submodule update --init --recursive util ast libcmdapp
+
+    - name: Build
+      if: ${{ matrix.os != 'windows-latest' }}
+      run: cd Gwion && make
+
+    - name: Build
+      if: ${{ matrix.os  == 'windows-latest' }}
+      run: cd Gwion && make USE_LTO=0
+      env:
+        BUILD_ON_WINDOWS: 1 
+
+    - name: make
+      if: ${{ matrix.os  != 'windows-latest' }}
+      run: CFLAGS="-IGwion/include -IGwion/ast/include -IGwion/ast/libprettyerr/src -IGwion/util/libtermcolor/include -IGwion/util/include -LGwion -LGwion/ast -LGwion/util -LGwion/ast/libprettyerr -LGwion/util/libtermcolor" make
+
+    - name: make
+      if: ${{ matrix.os  == 'windows-latest' }}
+      run: make
+      env:
+        BUILD_ON_WINDOWS: 1 
+        CFLAGS: -IGwion/include -IGwion/ast/include -IGwion/ast/libprettyerr/src -IGwion/util/libtermcolor/include -IGwion/util/include -LGwion -LGwion/ast -LGwion/util -LGwion/ast/libprettyerr -LGwion/util/libtermcolor
+
+    - name: Build asset
+      run: |
+        strip gw2json*
+        7z a gwion-tojson-nightly.zip gw2json*
+
+    - name: Set tag
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git tag -f -a nightly -m "Nightly update"
+        git push origin -f --follow-tags nightly
+
+    - name: Deploy release
+      uses: WebFreak001/deploy-nightly@v1.1.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: https://uploads.github.com/repos/Gwion/gwion-tojson/releases/42805756/assets{?name,label}
+        release_id: 42805756 # same as above (id can just be taken out the upload_url, it's used to find old releases)
+        asset_path: ./gwion-tojson-nightly.zip # path to archive to upload
+        asset_name: gwion-tojson-nightly-${{matrix.os}}-$$.zip # name to upload the release as, use $$ to insert date (YYYYMMDD) and 6 letter commit hash
+        asset_content_type: application/zip # required by GitHub API
+        max_releases: 1 # optional, if there are more releases than this matching the asset_name, the oldest ones are going to be deleted
